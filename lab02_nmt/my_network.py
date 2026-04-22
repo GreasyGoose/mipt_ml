@@ -2,50 +2,44 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import torchtext
-from torchtext.datasets import TranslationDataset, Multi30k
-from torchtext.data import Field, BucketIterator
-
 import random
 import math
 import time
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, emb_dim, hid_dim, n_layers, dropout):
+    def __init__(self, input_dim, emb_dim, hid_dim, n_layers, dropout, pad_idx):
         super().__init__()
-        
+
         self.input_dim = input_dim
         self.emb_dim = emb_dim
         self.hid_dim = hid_dim
         self.n_layers = n_layers
-#         self.dropout = dropout
-        
+
         self.embedding = nn.Embedding(
             num_embeddings=input_dim,
-            embedding_dim=emb_dim
+            embedding_dim=emb_dim,
+            padding_idx=pad_idx,
         )
-            # <YOUR CODE HERE>
-        
+
         self.rnn = nn.LSTM(
             input_size=emb_dim,
             hidden_size=hid_dim,
             num_layers=n_layers,
             dropout=dropout
         )
-            # <YOUR CODE HERE>
-        
-        self.dropout = nn.Dropout(p=dropout)# <YOUR CODE HERE>
-        
+
+        self.dropout = nn.Dropout(p=dropout)
+
     def forward(self, src):
         
         #src = [src sent len, batch size]
         
         # Compute an embedding from the src data and apply dropout to it
-        embedded = self.embedding(src)# <YOUR CODE HERE>
-        
+        embedded = self.embedding(src)
+
         embedded = self.dropout(embedded)
-        
+
         output, (hidden, cell) = self.rnn(embedded)
         #embedded = [src sent len, batch size, emb dim]
         
@@ -60,11 +54,11 @@ class Encoder(nn.Module):
         
         #outputs are always from the top hidden layer
         
-        return hidden, cell
-    
+        return output, hidden, cell
+
 
 class Decoder(nn.Module):
-    def __init__(self, output_dim, emb_dim, hid_dim, n_layers, dropout):
+    def __init__(self, output_dim, emb_dim, hid_dim, n_layers, dropout, pad_idx):
         super().__init__()
 
         self.emb_dim = emb_dim
@@ -72,30 +66,27 @@ class Decoder(nn.Module):
         self.output_dim = output_dim
         self.n_layers = n_layers
         self.dropout = dropout
-        
+
         self.embedding = nn.Embedding(
             num_embeddings=output_dim,
-            embedding_dim=emb_dim
+            embedding_dim=emb_dim,
+            padding_idx=pad_idx
         )
-            # <YOUR CODE HERE>
-        
+
         self.rnn = nn.LSTM(
             input_size=emb_dim,
             hidden_size=hid_dim,
             num_layers=n_layers,
             dropout=dropout
         )
-            # <YOUR CODE HERE>
-        
+
         self.out = nn.Linear(
             in_features=hid_dim,
             out_features=output_dim
         )
-            # <YOUR CODE HERE>
+        self.dropout = nn.Dropout(p=dropout)
         
-        self.dropout = nn.Dropout(p=dropout)# <YOUR CODE HERE>
-        
-    def forward(self, input, hidden, cell):
+    def forward(self, input, hidden, cell, encoder_outputs=None):
         
         #input = [batch size]
         #hidden = [n layers * n directions, batch size, hid dim]
@@ -110,7 +101,7 @@ class Decoder(nn.Module):
         #input = [1, batch size]
         
         # Compute an embedding from the input data and apply dropout to it
-        embedded = self.dropout(self.embedding(input))# <YOUR CODE HERE>
+        embedded = self.dropout(self.embedding(input))
         
         #embedded = [1, batch size, emb dim]
         
@@ -140,43 +131,43 @@ class Decoder(nn.Module):
 class Seq2Seq(nn.Module):
     def __init__(self, encoder, decoder, device):
         super().__init__()
-        
+
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
-        
+
         assert encoder.hid_dim == decoder.hid_dim, \
             "Hidden dimensions of encoder and decoder must be equal!"
         assert encoder.n_layers == decoder.n_layers, \
             "Encoder and decoder must have equal number of layers!"
-        
+
     def forward(self, src, trg, teacher_forcing_ratio = 0.5):
-        
+
         #src = [src sent len, batch size]
         #trg = [trg sent len, batch size]
         #teacher_forcing_ratio is probability to use teacher forcing
         #e.g. if teacher_forcing_ratio is 0.75 we use ground-truth inputs 75% of the time
-        
+
         # Again, now batch is the first dimention instead of zero
         batch_size = trg.shape[1]
         max_len = trg.shape[0]
         trg_vocab_size = self.decoder.output_dim
-        
+
         #tensor to store decoder outputs
         outputs = torch.zeros(max_len, batch_size, trg_vocab_size).to(self.device)
-        
+
         #last hidden state of the encoder is used as the initial hidden state of the decoder
-        hidden, cell = self.encoder(src)
-        
+        enc_output, hidden, cell = self.encoder(src)
+
         #first input to the decoder is the <sos> tokens
         input = trg[0,:]
-        
+
         for t in range(1, max_len):
-            
-            output, hidden, cell = self.decoder(input, hidden, cell)
+
+            output, hidden, cell = self.decoder(input, hidden, cell, enc_output)
             outputs[t] = output
             teacher_force = random.random() < teacher_forcing_ratio
             top1 = output.max(1)[1]
             input = (trg[t] if teacher_force else top1)
-        
+
         return outputs
